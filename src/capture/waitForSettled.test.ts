@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // setup.ts mocks this module globally; test the real one here.
 const { waitForSettled } = await vi.importActual<typeof import("./waitForSettled")>("./waitForSettled");
@@ -6,26 +6,47 @@ const { waitForSettled } = await vi.importActual<typeof import("./waitForSettled
 const root = () => document.body.appendChild(document.createElement("div"));
 
 describe("waitForSettled", () => {
+  // Fake timers keep these deterministic on slow CI runners.
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it("resolves once the DOM has been quiet", async () => {
-    await expect(waitForSettled(root(), { quietMs: 50, timeoutMs: 2000 })).resolves.toBeUndefined();
+    const settled = waitForSettled(root(), { quietMs: 50, timeoutMs: 2000 });
+    await vi.advanceTimersByTimeAsync(200);
+    await expect(settled).resolves.toBeUndefined();
   });
 
   it("waits while the DOM keeps changing", async () => {
     const el = root();
     const interval = setInterval(() => el.append(document.createElement("span")), 20);
-    const started = Date.now();
     setTimeout(() => clearInterval(interval), 400);
 
-    await waitForSettled(el, { quietMs: 100, timeoutMs: 3000 });
+    let settled = false;
+    const done = waitForSettled(el, { quietMs: 100, timeoutMs: 3000 }).then(() => {
+      settled = true;
+    });
 
-    expect(Date.now() - started).toBeGreaterThanOrEqual(400);
+    await vi.advanceTimersByTimeAsync(400);
+    expect(settled).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(400);
+    expect(settled).toBe(true);
+    await done;
   });
 
   it("rejects when activity never stops", async () => {
     const el = root();
     const interval = setInterval(() => el.append(document.createElement("span")), 20);
 
-    await expect(waitForSettled(el, { quietMs: 200, timeoutMs: 500 })).rejects.toThrow("still loading");
+    const settled = waitForSettled(el, { quietMs: 200, timeoutMs: 500 });
+    const assertion = expect(settled).rejects.toThrow("still loading");
+    await vi.advanceTimersByTimeAsync(600);
+    await assertion;
     clearInterval(interval);
   });
 });
